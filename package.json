@@ -1,0 +1,13 @@
+{
+  "name": "headless-playwright",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node scripts/server.mjs",
+    "dev": "node --watch scripts/server.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.51.0"
+  }
+}
