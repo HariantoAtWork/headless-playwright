@@ -5,9 +5,15 @@
   "version": "1.0.0",
   "scripts": {
     "start": "node scripts/server.mjs",
-    "dev": "node --watch scripts/server.mjs"
+    "dev": "node --watch scripts/server.mjs",
+    "lint": "eslint scripts/server.mjs"
   },
   "dependencies": {
     "playwright": "1.51.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0"
   }
 }

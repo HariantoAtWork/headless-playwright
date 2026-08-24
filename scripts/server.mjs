@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Headless Playwright fetch service — PhantomJS-as-a-service style.
+ * Headless Playwright interaction service — High-fidelity automation.
  *
  * GET  /health  → { ok, browser }
  * POST /fetch   → { url, timeoutMs? } → { title, html, url }
- * GET  /        → short service blurb
+ * POST /interact → { actions: Array<{type, selector?, value?, url?, fullPage?, timeoutMs?}> } → { title, html, url, screenshot (base64), latencyMs }
  */
 
 import http from 'node:http'
@@ -45,8 +45,7 @@ async function getBrowser() {
 async function fetchPage(url, timeoutMs) {
   const b = await getBrowser()
   const context = await b.newContext({
-    userAgent:
-      'Mozilla/5.0 (compatible; headless-playwright/1.0; +https://github.com/harianto)',
+    userAgent: 'Mozilla/5.0 (compatible; headless-playwright/1.0; +https://github.com/harianto)',
   })
   const page = await context.newPage()
   try {
@@ -61,6 +60,64 @@ async function fetchPage(url, timeoutMs) {
       throw new Error('Playwright returned empty HTML')
     }
     return { title: title || finalUrl, html, url: finalUrl }
+  } finally {
+    await context.close().catch(() => {})
+  }
+}
+
+async function runInteractions(actions, timeoutMs) {
+  const b = await getBrowser()
+  const context = await b.newContext({
+    userAgent: 'Mozilla/5.0 (compatible; headless-playwright/1.0; +https://github.com/harianto)',
+  })
+  const page = await context.newPage()
+  let lastResult = {}
+
+  try {
+    for (const step of actions) {
+      const { type, selector, value, url, fullPage, timeout } = step
+      const stepTimeout = timeout || timeoutMs || DEFAULT_TIMEOUT_MS
+
+      switch (type) {
+        case 'goto':
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: stepTimeout })
+          break
+        case 'fill':
+          await page.fill(selector, value, { timeout: stepTimeout })
+          break
+        case 'click':
+          await page.click(selector, { timeout: stepTimeout })
+          break
+        case 'wait':
+          await page.waitForTimeout(value || 1000, { timeout: stepTimeout })
+          break
+        case 'screenshot': {
+          const buffer = await page.screenshot({ 
+            fullPage: !!fullPage, 
+            type: 'png',
+            timeout: stepTimeout 
+          })
+          lastResult.screenshot = buffer.toString('base64')
+          break
+        }
+        case 'press':
+          await page.keyboard.press(value, { timeout: stepTimeout })
+          break
+        default:
+          throw new Error(`Unknown action type: ${type}`)
+      }
+    }
+
+    const title = await page.title()
+    const html = await page.content()
+    const finalUrl = page.url()
+
+    return {
+      title: title || finalUrl,
+      html,
+      url: finalUrl,
+      ...lastResult
+    }
   } finally {
     await context.close().catch(() => {})
   }
@@ -117,11 +174,12 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && path === '/') {
       sendJson(res, 200, {
-        service: 'headless-playwright',
-        version: '1.0.0',
+        service: 'headless-playwright-pro',
+        version: '2.0.0',
         endpoints: {
           health: 'GET /health',
           fetch: 'POST /fetch { url, timeoutMs? }',
+          interact: 'POST /interact { actions: Array<{type, selector?, value?, url?, fullPage?, timeout?}> }',
         },
       })
       return
@@ -146,7 +204,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/fetch') {
       const body = await readJson(req)
       const target = String(body.url || '').trim()
-      if (!/^https?:\/\//i.test(target)) {
+      if (!target.toLowerCase().startsWith('http://') && !target.toLowerCase().startsWith('https://')) {
         sendJson(res, 400, {
           ok: false,
           error: 'Body must include url starting with http(s)://',
@@ -161,6 +219,27 @@ const server = http.createServer(async (req, res) => {
         title: result.title,
         html: result.html,
         url: result.url,
+        latencyMs: Date.now() - started,
+      })
+      return
+    }
+
+    if (req.method === 'POST' && path === '/interact') {
+      const body = await readJson(req)
+      const actions = body.actions
+      if (!Array.isArray(actions)) {
+        sendJson(res, 400, { ok: false, error: 'Actions must be an array' })
+        return
+      }
+      const timeoutMs = clampTimeout(body.timeoutMs)
+      const started = Date.now()
+      const result = await runInteractions(actions, timeoutMs)
+      sendJson(res, 200, {
+        ok: true,
+        title: result.title,
+        html: result.html,
+        url: result.url,
+        screenshot: result.screenshot,
         latencyMs: Date.now() - started,
       })
       return
@@ -190,6 +269,6 @@ process.on('SIGTERM', () => void shutdown())
 
 server.listen(PORT, HOST, () => {
   console.info(
-    `[headless-playwright] listening on http://${HOST}:${PORT} (GET /health, POST /fetch)`,
+    `[headless-playwright] listening on http://${HOST}:${PORT} (GET /health, POST /fetch, POST /interact)`,
   )
 })
