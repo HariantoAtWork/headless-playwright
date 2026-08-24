@@ -69,13 +69,14 @@ async function runInteractions(actions, timeoutMs) {
   const b = await getBrowser()
   const context = await b.newContext({
     userAgent: 'Mozilla/5.0 (compatible; headless-playwright/1.0; +https://github.com/harianto)',
+    viewport: { width: 1280, height: 900 },
   })
   const page = await context.newPage()
-  let lastResult = {}
+  const screenshots = []
 
   try {
     for (const step of actions) {
-      const { type, selector, value, url, fullPage, timeout } = step
+      const { type, selector, value, url, fullPage, timeout, label } = step
       const stepTimeout = timeout || timeoutMs || DEFAULT_TIMEOUT_MS
 
       switch (type) {
@@ -88,21 +89,33 @@ async function runInteractions(actions, timeoutMs) {
         case 'click':
           await page.click(selector, { timeout: stepTimeout })
           break
-        case 'wait':
-          await page.waitForTimeout(value || 1000, { timeout: stepTimeout })
+        case 'select':
+          await page.selectOption(selector, value, { timeout: stepTimeout })
           break
-        case 'screenshot': {
-          const buffer = await page.screenshot({ 
-            fullPage: !!fullPage, 
-            type: 'png',
-            timeout: stepTimeout 
-          })
-          lastResult.screenshot = buffer.toString('base64')
-          break
-        }
         case 'press':
           await page.keyboard.press(value, { timeout: stepTimeout })
           break
+        case 'wait':
+          await page.waitForTimeout(value || 1000)
+          break
+        case 'waitForSelector':
+          await page.waitForSelector(selector, { timeout: stepTimeout })
+          break
+        case 'waitForURL':
+          await page.waitForURL(value, { timeout: stepTimeout })
+          break
+        case 'screenshot': {
+          const buffer = await page.screenshot({
+            fullPage: !!fullPage,
+            type: 'png',
+            timeout: stepTimeout,
+          })
+          screenshots.push({
+            label: label || `step-${screenshots.length + 1}`,
+            data: buffer.toString('base64'),
+          })
+          break
+        }
         default:
           throw new Error(`Unknown action type: ${type}`)
       }
@@ -116,7 +129,8 @@ async function runInteractions(actions, timeoutMs) {
       title: title || finalUrl,
       html,
       url: finalUrl,
-      ...lastResult
+      screenshots,
+      screenshot: screenshots.at(-1)?.data ?? null,
     }
   } finally {
     await context.close().catch(() => {})
@@ -179,7 +193,7 @@ const server = http.createServer(async (req, res) => {
         endpoints: {
           health: 'GET /health',
           fetch: 'POST /fetch { url, timeoutMs? }',
-          interact: 'POST /interact { actions: Array<{type, selector?, value?, url?, fullPage?, timeout?}> }',
+          interact: 'POST /interact { actions: Array<{type, selector?, value?, url?, fullPage?, label?, timeout?}> }',
         },
       })
       return
@@ -240,6 +254,7 @@ const server = http.createServer(async (req, res) => {
         html: result.html,
         url: result.url,
         screenshot: result.screenshot,
+        screenshots: result.screenshots,
         latencyMs: Date.now() - started,
       })
       return
