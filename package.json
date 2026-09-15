@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node scripts/server.mjs",
     "dev": "node --watch scripts/server.mjs",
-    "lint": "eslint scripts/server.mjs"
+    "lint": "eslint scripts/server.mjs",
+    "showcase": "node scripts/showcase.mjs"
   },
   "dependencies": {
     "playwright": "1.51.0"

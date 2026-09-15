@@ -89,6 +89,11 @@ async function runInteractions(actions, timeoutMs) {
         case 'click':
           await page.click(selector, { timeout: stepTimeout })
           break
+        case 'clickText': {
+          const el = await page.getByText(value, { exact: false }).first()
+          await el.click({ timeout: stepTimeout })
+          break
+        }
         case 'select':
           await page.selectOption(selector, value, { timeout: stepTimeout })
           break
