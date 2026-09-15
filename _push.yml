@@ -1,0 +1,11 @@
+# docker compose -f _push.yml build --no-cache --push
+# Multi-arch cannot be loaded into the local Docker engine; use _build.yml for local images.
+services:
+  headless-playwright:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
+    image: harianto/headless-playwright:latest

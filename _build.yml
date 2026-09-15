@@ -1,0 +1,7 @@
+# docker compose -f _build.yml build
+services:
+  headless-playwright:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: harianto/headless-playwright:latest

@@ -1,13 +1,11 @@
 services:
   headless-playwright:
-    container_name: playwright-headless
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: playwright-headless:1.51.0
+    container_name: headless-playwright
+    image: ${DOCKERHUB_USERNAME:-harianto}/headless-playwright:latest
     ports:
       - "${PLAYWRIGHT_HOST_PORT:-9380}:9380"
     environment:
+      NODE_ENV: production
       PLAYWRIGHT_PORT: "${PLAYWRIGHT_PORT:-9380}"
       PLAYWRIGHT_HOST: "0.0.0.0"
     # Chromium needs more than Docker’s default 64 MiB /dev/shm
