@@ -4,7 +4,8 @@
  *
  * GET  /health  → { ok, browser }
  * POST /fetch   → { url, timeoutMs? } → { title, html, url }
- * POST /interact → { actions: Array<{type, selector?, value?, url?, fullPage?, timeoutMs?}> } → { title, html, url, screenshot (base64), latencyMs }
+ * POST /pdf     → { url, timeoutMs?, cookie?, waitForSelector?, pdf? } → application/pdf
+ * POST /interact → { actions: … } → { title, html, url, screenshot, … }
  */
 
 import http from 'node:http'
@@ -14,6 +15,7 @@ const PORT = Number(process.env.PLAYWRIGHT_PORT || process.env.PORT || 9380)
 const HOST = process.env.PLAYWRIGHT_HOST || '0.0.0.0'
 const DEFAULT_TIMEOUT_MS = 45_000
 const MAX_TIMEOUT_MS = 120_000
+const DEFAULT_WAIT_SELECTOR = '[data-cv-print-ready="true"]'
 
 /** @type {import('playwright').Browser | null} */
 let browser = null
@@ -60,6 +62,72 @@ async function fetchPage(url, timeoutMs) {
       throw new Error('Playwright returned empty HTML')
     }
     return { title: title || finalUrl, html, url: finalUrl }
+  } finally {
+    await context.close().catch(() => {})
+  }
+}
+
+/**
+ * Shared PDF contract with headless-oxider.
+ * @param {object} options
+ * @param {string} options.url
+ * @param {number} options.timeoutMs
+ * @param {string} [options.cookie]
+ * @param {string} [options.waitForSelector]
+ * @param {object} [options.pdf]
+ */
+async function renderPdf(options) {
+  const {
+    url,
+    timeoutMs,
+    cookie,
+    waitForSelector = DEFAULT_WAIT_SELECTOR,
+    pdf: pdfOpts = {},
+  } = options
+
+  const b = await getBrowser()
+  const context = await b.newContext({
+    userAgent: 'Mozilla/5.0 (compatible; headless-playwright/1.0; +https://github.com/harianto)',
+  })
+  const page = await context.newPage()
+
+  try {
+    if (cookie && String(cookie).trim()) {
+      await page.setExtraHTTPHeaders({ cookie: String(cookie).trim() })
+    }
+
+    await page.goto(url, {
+      waitUntil: 'load',
+      timeout: timeoutMs,
+    })
+
+    const selector = String(waitForSelector || DEFAULT_WAIT_SELECTOR).trim()
+    if (selector) {
+      await page.waitForSelector(selector, { timeout: Math.min(timeoutMs, 30_000) })
+    }
+
+    // Let webfonts settle after the ready marker.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    const margin = pdfOpts.margin && typeof pdfOpts.margin === 'object'
+      ? pdfOpts.margin
+      : { top: '0', right: '0', bottom: '0', left: '0' }
+
+    const buffer = await page.pdf({
+      format: pdfOpts.format || 'A4',
+      scale: typeof pdfOpts.scale === 'number' ? pdfOpts.scale : 0.79,
+      printBackground: pdfOpts.printBackground !== false,
+      // Default false (CDP/Playwright). Prefer CSS page size ignores scale.
+      preferCSSPageSize: pdfOpts.preferCSSPageSize === true,
+      margin: {
+        top: String(margin.top ?? '0'),
+        right: String(margin.right ?? '0'),
+        bottom: String(margin.bottom ?? '0'),
+        left: String(margin.left ?? '0'),
+      },
+    })
+
+    return Buffer.from(buffer)
   } finally {
     await context.close().catch(() => {})
   }
@@ -151,6 +219,14 @@ function sendJson(res, status, body) {
   res.end(payload)
 }
 
+function sendPdf(res, buffer) {
+  res.writeHead(200, {
+    'Content-Type': 'application/pdf',
+    'Content-Length': buffer.length,
+  })
+  res.end(buffer)
+}
+
 function readJson(req, limit = 64_000) {
   return new Promise((resolve, reject) => {
     const chunks = []
@@ -186,6 +262,14 @@ function clampTimeout(value) {
   return Math.min(Math.max(Math.floor(n), 1_000), MAX_TIMEOUT_MS)
 }
 
+function requireHttpUrl(value) {
+  const target = String(value || '').trim()
+  if (!target.toLowerCase().startsWith('http://') && !target.toLowerCase().startsWith('https://')) {
+    return null
+  }
+  return target
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
   const path = url.pathname.replace(/\/+$/, '') || '/'
@@ -194,10 +278,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && path === '/') {
       sendJson(res, 200, {
         service: 'headless-playwright-pro',
-        version: '2.0.0',
+        version: '2.1.0',
         endpoints: {
           health: 'GET /health',
           fetch: 'POST /fetch { url, timeoutMs? }',
+          pdf: 'POST /pdf { url, timeoutMs?, cookie?, waitForSelector?, pdf? }',
           interact: 'POST /interact { actions: Array<{type, selector?, value?, url?, fullPage?, label?, timeout?}> }',
         },
       })
@@ -222,8 +307,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && path === '/fetch') {
       const body = await readJson(req)
-      const target = String(body.url || '').trim()
-      if (!target.toLowerCase().startsWith('http://') && !target.toLowerCase().startsWith('https://')) {
+      const target = requireHttpUrl(body.url)
+      if (!target) {
         sendJson(res, 400, {
           ok: false,
           error: 'Body must include url starting with http(s)://',
@@ -240,6 +325,28 @@ const server = http.createServer(async (req, res) => {
         url: result.url,
         latencyMs: Date.now() - started,
       })
+      return
+    }
+
+    if (req.method === 'POST' && path === '/pdf') {
+      const body = await readJson(req)
+      const target = requireHttpUrl(body.url)
+      if (!target) {
+        sendJson(res, 400, {
+          ok: false,
+          error: 'Body must include url starting with http(s)://',
+        })
+        return
+      }
+      const timeoutMs = clampTimeout(body.timeoutMs)
+      const pdf = await renderPdf({
+        url: target,
+        timeoutMs,
+        cookie: body.cookie,
+        waitForSelector: body.waitForSelector,
+        pdf: body.pdf,
+      })
+      sendPdf(res, pdf)
       return
     }
 
@@ -289,6 +396,6 @@ process.on('SIGTERM', () => void shutdown())
 
 server.listen(PORT, HOST, () => {
   console.info(
-    `[headless-playwright] listening on http://${HOST}:${PORT} (GET /health, POST /fetch, POST /interact)`,
+    `[headless-playwright] listening on http://${HOST}:${PORT} (GET /health, POST /fetch, POST /pdf, POST /interact)`,
   )
 })
