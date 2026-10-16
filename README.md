@@ -29,6 +29,8 @@ curl -s -X POST http://127.0.0.1:9380/fetch \
 
 Multi-arch Hub push: `./dc.sh push` (amd64 + arm64).
 
+**GitHub → Docker Hub (SemVer):** push a git tag `v1.0.1` (etc.). Learn the ritual: [docs/semver-releases.md](docs/semver-releases.md).
+
 Default host port: **9380** (Obscura 9222, Camoufox 9377).
 
 ## Blog / CV plugin
